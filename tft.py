@@ -24,7 +24,8 @@
 # fbcp (Screen will show the default RPi X session
 # sudo nano /etc/rc.local (Now going to make this happen on boot)
 # Add before the 'exit' line: fbcp&
-# Save and reboot. 
+# Save and reboot.
+# To make clock start on reboot, add '@python /home/pi/SB-Pi-TFT/tft.py' to ~/.config/lxsession/LXDE-pi/autostart
 
 ##  Do a sudo pip install for feedparser, pyown
 
@@ -39,16 +40,75 @@ import pygame
 import os
 import io
 import pyowm
+import math                      # Trig functions used for the analogue clock rendering.
 from urllib2 import urlopen
-from gpiozero import Button
+import RPi.GPIO as GPIO # For the PTM interrupts.
+import csv
+import random
 
-# Which GPIO pins are the PTMs wired from GND to? Use GPIO number (not pin)
-b1 = Button(17)
-b2 = Button(27)
-b3 = Button(22)
+# Which GPIO pins are the PTMs wired from GND to? Use GPIO number (not pin). Pin 22 has the right switch. 17 and 27 are the others.
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(22, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+GPIO.setup(17, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+GPIO.setup(27, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
+def mid_callback(channel):
+    # 11/3/18. Tried using GPIO.remove_event_detect(27) while this runs, but it causes a seg fault.
+    global callbackLock
+
+    if callbackLock == False:
+        callbackLock == True
+        global whatsOn
+        global clockStyle
+        global weatherStyle
+        # Use middle for toggling views. 
+        if whatsOn == 'clock':
+            if clockStyle == 'analogue':
+                clockStyle = 'digital'
+                pygame.draw.rect(lcd, grey, (0, 0, 360, 70))
+                drawText("Changed to 'Digital'", 40, 10, 10, black)
+                pygame.display.update()
+            elif clockStyle == 'digital':
+                clockStyle = 'analogue'
+                pygame.draw.rect(lcd, grey, (0, 0, 360, 70))
+                drawText("Changed to 'Analogue'", 40, 10, 10, black)
+                pygame.display.update()
+                
+        elif whatsOn == 'weather':
+            if weatherStyle == 'normal':
+                weatherStyle = 'detail'
+                pygame.draw.rect(lcd, grey, (0, 0, 360, 70))
+                drawText("Changed to 'detail'", 40, 10, 10, black)
+                pygame.display.update()
+            elif weatherStyle == 'detail':
+                weatherStyle = 'brief'
+                pygame.draw.rect(lcd, grey, (0, 0, 360, 70))
+                drawText("Changed to 'brief'", 40, 10, 10, black)
+                pygame.display.update()
+            else:
+                weatherStyle = 'normal'
+                pygame.draw.rect(lcd, grey, (0, 0, 360, 70))
+                drawText("Changed to 'normal'", 40, 10, 10, black)
+                pygame.display.update()    
+        else:
+            print("middle button pushed")
+        
+        # Resume callbback processing.
+        time.sleep(1)
+        callbackLock = False
+
+def left_callback(channel):  
+    print ("Left")
+
+def right_callback(channel):  
+    print ("Right")
+
+GPIO.add_event_detect(17, GPIO.FALLING, callback=left_callback) 
+GPIO.add_event_detect(27, GPIO.FALLING, callback=mid_callback) 
+GPIO.add_event_detect(22, GPIO.FALLING, callback=right_callback) 
+    
 # OpenWeatherMap API key...
-weatherKey='INSERT HERE'
+weatherKey='ADD YOURS HERE'
 owm = pyowm.OWM(weatherKey)
 
 #########
@@ -57,13 +117,18 @@ owm = pyowm.OWM(weatherKey)
 pygame.init()
 lcd = pygame.display.set_mode((720, 480), pygame.FULLSCREEN)
 pygame.mouse.set_visible(False)
+callbackLock = False # Prevent multiple callbacks when users hit the button.
 # Dampen down the colours a bit to help limit screen burn-in.
 white = (240, 240, 240)
 black = (0, 0, 0)
-red = (200, 0, 0)
+red = (230, 0, 0)
 yellow = (200, 200, 0)
 green = (0, 200, 0)
 grey = (175, 175, 175)
+
+whatsOn = ''
+clockStyle = 'lit'
+weatherStyle = 'brief'
 
 ########
 ##  General-purpose functions.
@@ -171,7 +236,7 @@ def renderWeatherNow():
     print "Weather error:", sys.exc_info()[0]
     print "Weather error:", sys.exc_info()[1]
       
-def renderWeather():
+def renderWeather(): 
   # Renders longer-term  weather onto the display
   observation = owm.weather_at_place('Market Deeping,uk')
   w = observation.get_weather()
@@ -217,7 +282,7 @@ def renderWeather():
     for weather in lst:
       if x < 300:
         icon = weather.get_weather_icon_name()
-        theTemp = int(weather.get_temperature(unit='celsius')[u'day'])
+        theTemp = int(weather.get_temperature(unit='celsius')['day'])
         forecastTime = weather.get_reference_time('iso')
         forecastday = str(forecastTime[8:10])
 
@@ -255,6 +320,15 @@ def renderWeatherIcon(icon, xPos, yPos, xSize=90, ySize=90):
   image = pygame.transform.scale(image, [xSize,ySize])
   lcd.blit(image, (xPos, yPos))
 
+def showBriefWeather():
+    observation = owm.weather_at_place('Market Deeping,uk')
+    w = observation.get_weather()
+    currTemp = w.get_temperature(unit='celsius')
+    icon = w.get_weather_icon_name()
+    renderWeatherIcon(icon, 60, 90, 300, 300)
+    drawText(str(int(currTemp['temp'])) + "C", 175, 390, 150, white)
+    pygame.display.update()
+
 def paintTime(numSecs = 5):
   # Show the time / date at the bottom for 5s, then update everything else.
   for x in range(numSecs * 2):
@@ -271,7 +345,225 @@ def showTime():
   drawText(theTime[0:8],175,25,100, white)
   drawText(theDate, 75, 40, 280, white)
   pygame.display.update()
+
+def showAnaTime(howLong):
+  # howLong is how long to render the time like this before returning to the main loop.
+
+  for x in range(howLong * 100):
+    #Draw an analgoue representation. 720 x 480
+    theTime = datetime.datetime.now()
+    tDay = theTime.day
+    tHour = theTime.hour
+    tMin = theTime.minute
+    tSeconds = theTime.second
+    tMilli = int(theTime.microsecond / 1000)
+    dayNum = datetime.datetime.today().weekday()
+    days = {0:'MON', 1:'TUE', 2:'WED', 3:'THU', 4:'FRI', 5:'SAT', 6:'SUN'}
+
+    
+    xCentre = 720 / 2
+    yCentre  = 480 / 2
+    lcd.fill(black)
+
+    # Draw the little tick-marks
+    for mark in range(60):
+      tickStart = 185
+      tickLength = 15
+      # Trig is CPU heavy. Calculate once, use twice.
+      cosCalc = math.cos((270 + 6 * mark) * 3.14159 / 180)
+      sinCalc = math.sin((270 + 6 * mark) * 3.14159 / 180)
+      xCoordStart = xCentre + tickStart * cosCalc
+      yCoordStart = yCentre + tickStart * sinCalc
+      xCoordEnd = xCentre + (tickStart + tickLength) * cosCalc
+      yCoordEnd = yCentre + (tickStart + tickLength) * sinCalc
+      if mark % 5 == 0:
+        pygame.draw.line(lcd, white, [xCoordStart, yCoordStart], [xCoordEnd, yCoordEnd], 5)
+      else:
+        pygame.draw.aaline(lcd, white, [xCoordStart, yCoordStart], [xCoordEnd, yCoordEnd], 1)
+
+    # Show date and day
+    drawText(days[dayNum], 30, 415, 222, white)
+    drawText(str(tDay), 30, 485, 222, red)
+    
+    # Hour hand.
+    hourHandLength = 110
+    if tHour > 12:
+      tHour = tHour - 12
+      
+    hourAngle=(tHour * 30) + (tMin * 0.5) + 270
+    # Hour hand made from a thin line, a circle, a thick line, then a circle.
+    cosCalc = math.cos(hourAngle * 3.14159 / 180)
+    sinCalc = math.sin(hourAngle * 3.14159 / 180)
+
+    # Thin line
+    xCoordStart = xCentre
+    yCoordStart = yCentre
+    xtCoordEnd = xCentre + (hourHandLength * 0.35) * cosCalc
+    ytCoordEnd = yCentre + (hourHandLength * 0.35) * sinCalc
+    pygame.draw.line(lcd, white, [xCoordStart, yCoordStart], [xtCoordEnd, ytCoordEnd], 7)
+
+    
+    # Thick line
+    xCoordEnd = xCentre + hourHandLength * cosCalc
+    yCoordEnd = yCentre + hourHandLength * sinCalc
+    pygame.draw.line(lcd, white, [xtCoordEnd, ytCoordEnd], [xCoordEnd, yCoordEnd], 15)    
+
+    # Inner-most circle
+    pygame.draw.circle(lcd, white, [int(xtCoordEnd), int(ytCoordEnd)], 6, 0)
+
+    # Outer-most circle
+    pygame.draw.circle(lcd, white, [int(xCoordEnd), int(yCoordEnd)], 6, 0)
+
+    # ################
+    # Minute hand. 
+    minHandLength = 184
+    cosCalc = math.cos((270 + (6 * tMin) + (0.1 * tSeconds)) * 3.14159 / 180)
+    sinCalc = math.sin((270 + (6 * tMin) + (0.1 * tSeconds)) * 3.14159 / 180)
+
+    # Thin line
+    xCoordStart = xCentre
+    yCoordStart = yCentre
+    xtCoordEnd = xCentre + (minHandLength * 0.2) * cosCalc
+    ytCoordEnd = yCentre + (minHandLength * 0.2) * sinCalc
+    pygame.draw.line(lcd, black, [xCoordStart, yCoordStart], [xtCoordEnd, ytCoordEnd], 9)
+    pygame.draw.line(lcd, white, [xCoordStart, yCoordStart], [xtCoordEnd, ytCoordEnd], 7)
+
+    
+    # Thick line 
+    xCoordEnd = xCentre + minHandLength * cosCalc
+    yCoordEnd = yCentre + minHandLength * sinCalc
+    pygame.draw.line(lcd, black, [xtCoordEnd, ytCoordEnd], [xCoordEnd, yCoordEnd], 17)
+    pygame.draw.line(lcd, white, [xtCoordEnd, ytCoordEnd], [xCoordEnd, yCoordEnd], 15)
+
+    # Inner-most circle
+    pygame.draw.circle(lcd, white, [int(xtCoordEnd), int(ytCoordEnd)], 6, 0)
+    
+    # Outer-most circle
+    pygame.draw.circle(lcd, white, [int(xCoordEnd), int(yCoordEnd)], 6, 0)
+
+    # Circle dead-centre to hide the centre-point ends of the lines.
+    pygame.draw.circle(lcd, white, [360, 240], 15, 0)
   
+    # Second hand.
+    secHandLength = 200
+    secAngle = (6 * tSeconds) + (0.006 * tMilli)
+    xCoord = xCentre + secHandLength * math.cos((270 + secAngle) * (3.14159 / 180))
+    yCoord = yCentre + secHandLength * math.sin((270 + secAngle) * (3.14159 / 180))
+    pygame.draw.line(lcd, red, [360, 240], [xCoord, yCoord], 5)
+    # Add a little stubby line in the opposite direction, like on a watch
+    xCoord = xCentre + (secHandLength / 7) * math.cos((90 + secAngle) * (3.14159 / 180))
+    yCoord = yCentre + (secHandLength / 7) * math.sin((90 + secAngle) * (3.14159 / 180))
+    pygame.draw.line(lcd, red, [360, 240], [xCoord, yCoord], 5)
+    
+    pygame.draw.circle(lcd, red, [360, 240], 10, 0)
+    pygame.draw.circle(lcd, black, [360, 240], 2, 0)
+  
+    # Add date and render.
+    theDate = time.strftime("%d/%m/%Y")
+    drawText(theDate, 50, 5, 415, white)
+    pygame.display.update()
+    time.sleep(0.01)
+
+
+def loadQuotes():
+    loc = os.getcwd()
+
+    # Open the times list...
+    with open(loc + '/quotes.csv', 'rb') as csvfile:
+        content = csv.reader(csvfile, delimiter='|', quotechar='"')
+        return list(content)
+
+
+def drawQuoteText(surface, text, color, rect, font=None, aa=False, bkg=None, fntSize=50):
+    rect = pygame.Rect(rect)
+    y = rect.top
+    lineSpacing = -2
+    pygame.font.init()
+
+    font = pygame.font.Font(font, fntSize)
+
+    # get the height of the font
+    fontHeight = font.size("Tg")[1]
+    
+    while text:
+        i = 1
+        # determine if the row of text will be outside our area
+        if y + fontHeight > rect.bottom:
+            return text   # was break. 
+        
+        # determine maximum width of line
+        while font.size(text[:i])[0] < rect.width and i < len(text):
+            i += 1
+
+        # if we've wrapped the text, then adjust the wrap to the last word
+        if i < len(text):
+            i = text.rfind(" ", 0, i) + 1
+
+        # render the line and blit it to the surface
+        if bkg:
+            image = font.render(text[:i], 1, color, bkg)
+            image.set_colorkey(bkg)
+        else:
+            image = font.render(text[:i], aa, color)
+
+        surface.blit(image, (rect.left, y))
+        y += fontHeight + lineSpacing
+
+        # remove the text we just blitted
+        text = text[i:]
+
+    return text
+
+def showLitTime(howLong = 15):
+    quotes = loadQuotes()
+
+    # Pick up the time
+    theTime = datetime.datetime.now()
+    tHour = theTime.hour
+    tMin = theTime.minute
+
+    # Find all the times that are available, and pick one
+    # If there's no entry for that time, jump forward a minute and try that.
+    timeOptions = []
+    gotOne = False
+    while gotOne == False:
+        for entry in quotes:
+            if  entry[0] == str(tHour) + ':' + str(tMin):
+                timeOptions.append(entry)
+                gotOne = True
+
+        tMin += 1
+            
+    # Now select (at random) one of the quotes for this time.
+    whichQuote = random.randint(0, len(timeOptions) -1)
+    
+    quoteHighlight = timeOptions[whichQuote][1]
+    quoteText = timeOptions[whichQuote][2]
+    quoteTitle = timeOptions[whichQuote][3]
+    quoteAuthor = timeOptions[whichQuote][4]
+                
+    # Render to page. (720x480 total area)
+    fontPath = '/usr/share/fonts/truetype/'
+    trySize = 100
+    leftovers = drawQuoteText(lcd, quoteText, white, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
+
+    while leftovers != '':
+        trySize -= 3
+        leftovers = drawQuoteText(lcd, quoteText, white, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
+
+
+    lcd.fill(black)
+    drawQuoteText(lcd, quoteText, white, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
+
+    newtext = quoteText.find(quoteHighlight)  + len(quoteHighlight)
+    drawQuoteText(lcd, quoteText[:newtext], red, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
+
+    drawText(quoteTitle, 45, 15, 360, grey)
+    drawText(quoteAuthor, 45, 15, 415, grey)
+    #drawQuoteText(lcd, quoteTitle[:25], white, [10,360,710, 390], fontPath + 'liberation2/LiberationSerif-Bold.ttf', False, None, tryTSize)
+    #drawQuoteText(lcd, quoteAuthor, white, [10,415,710, 470], fontPath + 'liberation2/LiberationSerif-Regular.ttf')
+    pygame.display.update()
+    time.sleep(howLong)
 
 ########
 ## Multi-day forecast code starts
@@ -287,29 +579,49 @@ def multiDay():
 ########
 
 def main():
+  global whatsOn
+  global weatherStyle
+  
   whichHeadline = 0
   lcd.fill(white)
   
   while True:
-    # Show weather for now
-    try:
-      lcd.fill(black)
-      renderWeatherNow()
-      time.sleep(6)
-    except:
-      time.sleep(0.25)
-    
-    # Show time / date
+    # Always have the literature clock in the rotation.
+    whatsOn = 'clock'
+    showLitTime(15)
+                    
+    # Show weather
+    whatsOn = 'weather'
     lcd.fill(black)
-    for n in range(30):
-      showTime()
-      time.sleep(0.2)
-      lcd.fill(black)
 
-      if b3.is_pressed:
-        break
+    try:
+        if weatherStyle == 'normal':
+            renderWeatherNow()
+        elif weatherStyle == 'brief':
+            # icon only view
+            showBriefWeather()
+        else:
+            # Detailed view
+            renderWeather()
 
+        time.sleep(6)
+    except:
+        time.sleep(0.25)
+    
+    whatsOn = 'clock'
+    if clockStyle == 'analogue':  
+        showAnaTime(3)
+    else:
+        # Show digital clock
+        whatsOn = 'clock'
+        lcd.fill(black)
+        for n in range(30):
+            showTime()
+            time.sleep(0.01)
+            lcd.fill(black)
+                
     # Show the news...
+    whatsOn='news'
     try:
       lcd.fill(black)
       renderNews()
@@ -319,19 +631,9 @@ def main():
       print "Unexpected error:", sys.exc_info()[1]
       time.sleep(0.25)
 
-    # Show time / date again
-    lcd.fill(black)
-    for n in range(30):
-      showTime()
-      time.sleep(0.2)
-      lcd.fill(black)
-
-      if b3.is_pressed:
-        break
       
 main()
 
-'''
 if __name__ == '__main__':
   try:
     main()
@@ -340,4 +642,3 @@ if __name__ == '__main__':
   finally:
     pygame.quit()   # stops the PyGame engine
     sys.exit()
-'''
