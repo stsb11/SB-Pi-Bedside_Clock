@@ -108,7 +108,7 @@ GPIO.add_event_detect(27, GPIO.FALLING, callback=mid_callback)
 GPIO.add_event_detect(22, GPIO.FALLING, callback=right_callback) 
     
 # OpenWeatherMap API key...
-weatherKey='ADD YOURS HERE'
+weatherKey='INSERT HERE'
 owm = pyowm.OWM(weatherKey)
 
 #########
@@ -127,8 +127,20 @@ green = (0, 200, 0)
 grey = (175, 175, 175)
 
 whatsOn = ''
-clockStyle = 'lit'
+clockStyle = 'analogue'
 weatherStyle = 'brief'
+
+def loadQuotes():
+    loc = os.getcwd() # FIX THIS. Should pick up the location of this PY file.
+    loc = '/home/pi/SB-Pi-Bedside_Clock'
+
+    # Open the times list...
+    with open(loc + '/quotes.csv', 'rb') as csvfile:
+        content = csv.reader(csvfile, delimiter='|', quotechar='"')
+        return list(content)
+
+# Load up literature  (once)...
+quotes = loadQuotes()
 
 ########
 ##  General-purpose functions.
@@ -155,7 +167,7 @@ def renderNews():
   d = feedparser.parse('http://feeds.bbci.co.uk/news/rss.xml?edition=uk')
 
   # Show BBC logo.
-  image = pygame.image.load('/home/pi/SB-Pi-TFT/bbc.png')
+  image = pygame.image.load('/home/pi/SB-Pi-Bedside_Clock/bbc.png')
   image = pygame.transform.scale(image, [204,106]) # Original is 1024 x 576
   lcd.blit(image, (250, 10))
 
@@ -465,15 +477,6 @@ def showAnaTime(howLong):
     time.sleep(0.01)
 
 
-def loadQuotes():
-    loc = os.getcwd()
-
-    # Open the times list...
-    with open(loc + '/quotes.csv', 'rb') as csvfile:
-        content = csv.reader(csvfile, delimiter='|', quotechar='"')
-        return list(content)
-
-
 def drawQuoteText(surface, text, color, rect, font=None, aa=False, bkg=None, fntSize=50):
     rect = pygame.Rect(rect)
     y = rect.top
@@ -515,12 +518,27 @@ def drawQuoteText(surface, text, color, rect, font=None, aa=False, bkg=None, fnt
     return text
 
 def showLitTime(howLong = 15):
-    quotes = loadQuotes()
+    global quotes
 
     # Pick up the time
     theTime = datetime.datetime.now()
     tHour = theTime.hour
     tMin = theTime.minute
+
+    if tHour < 10:
+        tHr = "0" + str(tHour)
+    else:
+        tHr = str(tHour)
+
+    if tMin < 10:
+        tMn = "0" + str(tMin)
+    else:
+        tMn = str(tMin)
+        
+    #f= open("/home/pi/lit.txt","a")
+    #f.write("Looking for" + tHr + ':' + tMn + "\n")
+    #f.close()
+    #print ("Looking for" + tHr + ':' + tMn)
 
     # Find all the times that are available, and pick one
     # If there's no entry for that time, jump forward a minute and try that.
@@ -528,11 +546,28 @@ def showLitTime(howLong = 15):
     gotOne = False
     while gotOne == False:
         for entry in quotes:
-            if  entry[0] == str(tHour) + ':' + str(tMin):
+            if  entry[0] == tHr + ':' + tMn:
                 timeOptions.append(entry)
                 gotOne = True
 
-        tMin += 1
+        if gotOne == False:
+            tMin += 1
+            if tMin>59:
+                tMin = 0
+                tHour += 1
+
+                if tHour > 23:
+                    tHour=0
+                    
+            if tHour < 10:
+                tHr = "0" + str(tHour)
+            else:
+                tHr = str(tHour)
+
+                if tMin < 10:
+                    tMn = "0" + str(tMin)
+                else:
+                    tMn = str(tMin)
             
     # Now select (at random) one of the quotes for this time.
     whichQuote = random.randint(0, len(timeOptions) -1)
@@ -545,24 +580,51 @@ def showLitTime(howLong = 15):
     # Render to page. (720x480 total area)
     fontPath = '/usr/share/fonts/truetype/'
     trySize = 100
-    leftovers = drawQuoteText(lcd, quoteText, white, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
 
-    while leftovers != '':
-        trySize -= 3
-        leftovers = drawQuoteText(lcd, quoteText, white, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
+    leftovers = drawQuoteText(lcd, quoteText, white, [10,10,710, 370], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
+
+    while leftovers != '' and trySize >=10:
+        trySize -= 5
+        leftovers = drawQuoteText(lcd, quoteText, white, [10,10,710, 370], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
 
 
+    # Same thing again for the book title. Should put this into a function, really.
+    tryTSize = 50
+    titleLeftovers = drawQuoteText(lcd, quoteTitle, white, [15, 360, 710, 390], fontPath + 'liberation2/LiberationSans-Regular.ttf', False, None, tryTSize)
+    
+    while titleLeftovers != '' and tryTSize >=10:
+        tryTSize -= 3
+        titleLeftovers = drawQuoteText(lcd, quoteTitle, white, [15, 360, 710, 390], fontPath + 'liberation2/LiberationSans-Regular.ttf', False, None, tryTSize)
+
+        
+    # f= open("/home/pi/lit.txt","a")
+    # f.write("Done - trySize is " + str(trySize)  + ". Rendering quote to display \n")
+    # f.close()
     lcd.fill(black)
-    drawQuoteText(lcd, quoteText, white, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
 
-    newtext = quoteText.find(quoteHighlight)  + len(quoteHighlight)
-    drawQuoteText(lcd, quoteText[:newtext], red, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
+    # If the time part is in the first half, draw the whole text white, then again (up to the time) in red to cover it.
+    # Some of the excerpts are capitalised and others aren't.
+    qText = quoteText.upper()
+    qHighlight = quoteHighlight.upper()
+    
+    if qText.find(qHighlight) < len(quoteText) / 2:
+        drawQuoteText(lcd, quoteText, white, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
+        newtext = quoteText.find(quoteHighlight)  + len(quoteHighlight)
+        drawQuoteText(lcd, quoteText[:newtext], red, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
+    elif qText.find(qHighlight) >= len(quoteText) / 2:
+        drawQuoteText(lcd, quoteText, red, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
+        newtext = quoteText.find(quoteHighlight)  # + len(quoteHighlight)
+        drawQuoteText(lcd, quoteText[:newtext], white, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
+    else:
+        # Quote highlight can't be found
+        drawQuoteText(lcd, quoteText, white, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
 
-    drawText(quoteTitle, 45, 15, 360, grey)
+    drawQuoteText(lcd, quoteTitle, grey, [15, 360, 710, 390], fontPath + 'liberation2/LiberationSans-Bold.ttf', False, None, tryTSize)
+    #drawText(quoteTitle, 45, 15, 360, grey)
     drawText(quoteAuthor, 45, 15, 415, grey)
     #drawQuoteText(lcd, quoteTitle[:25], white, [10,360,710, 390], fontPath + 'liberation2/LiberationSerif-Bold.ttf', False, None, tryTSize)
     #drawQuoteText(lcd, quoteAuthor, white, [10,415,710, 470], fontPath + 'liberation2/LiberationSerif-Regular.ttf')
-    pygame.display.update()
+    pygame.display.update()    
     time.sleep(howLong)
 
 ########
@@ -586,10 +648,19 @@ def main():
   lcd.fill(white)
   
   while True:
-    # Always have the literature clock in the rotation.
+
     whatsOn = 'clock'
-    showLitTime(15)
-                    
+    if clockStyle == 'analogue':  
+        showAnaTime(3)
+    else:
+        # Show digital clock
+        whatsOn = 'clock'
+        lcd.fill(black)
+        for n in range(30):
+            showTime()
+            time.sleep(0.01)
+            lcd.fill(black)
+                            
     # Show weather
     whatsOn = 'weather'
     lcd.fill(black)
@@ -608,17 +679,9 @@ def main():
     except:
         time.sleep(0.25)
     
+    # Always have the literature clock in the rotation.
     whatsOn = 'clock'
-    if clockStyle == 'analogue':  
-        showAnaTime(3)
-    else:
-        # Show digital clock
-        whatsOn = 'clock'
-        lcd.fill(black)
-        for n in range(30):
-            showTime()
-            time.sleep(0.01)
-            lcd.fill(black)
+    showLitTime(15)
                 
     # Show the news...
     whatsOn='news'
