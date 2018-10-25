@@ -99,6 +99,8 @@ def mid_callback(channel):
 
 def left_callback(channel):  
     print ("Left")
+    pygame.quit()   # stops the PyGame engine, quits the app.
+    sys.exit()
 
 def right_callback(channel):  
     print ("Right")
@@ -108,7 +110,7 @@ GPIO.add_event_detect(27, GPIO.FALLING, callback=mid_callback)
 GPIO.add_event_detect(22, GPIO.FALLING, callback=right_callback) 
     
 # OpenWeatherMap API key...
-weatherKey='INSERT HERE'
+weatherKey=''
 owm = pyowm.OWM(weatherKey)
 
 #########
@@ -587,16 +589,14 @@ def showLitTime(howLong = 15):
         trySize -= 5
         leftovers = drawQuoteText(lcd, quoteText, white, [10,10,710, 370], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
 
-
     # Same thing again for the book title. Should put this into a function, really.
     tryTSize = 50
-    titleLeftovers = drawQuoteText(lcd, quoteTitle, white, [15, 360, 710, 390], fontPath + 'liberation2/LiberationSans-Regular.ttf', False, None, tryTSize)
+    titleLeftovers = drawQuoteText(lcd, quoteTitle, white, [15, 360, 700, 50], fontPath + 'liberation2/LiberationSans-Bold.ttf', False, None, tryTSize)
     
     while titleLeftovers != '' and tryTSize >=10:
         tryTSize -= 3
-        titleLeftovers = drawQuoteText(lcd, quoteTitle, white, [15, 360, 710, 390], fontPath + 'liberation2/LiberationSans-Regular.ttf', False, None, tryTSize)
+        titleLeftovers = drawQuoteText(lcd, quoteTitle, white, [15, 360, 700, 50], fontPath + 'liberation2/LiberationSans-Bold.ttf', False, None, tryTSize)
 
-        
     # f= open("/home/pi/lit.txt","a")
     # f.write("Done - trySize is " + str(trySize)  + ". Rendering quote to display \n")
     # f.close()
@@ -608,20 +608,21 @@ def showLitTime(howLong = 15):
     qHighlight = quoteHighlight.upper()
     
     if qText.find(qHighlight) < len(quoteText) / 2:
-        drawQuoteText(lcd, quoteText, white, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
+        drawQuoteText(lcd, quoteText, white, [10,10,710, 370], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
         newtext = quoteText.find(quoteHighlight)  + len(quoteHighlight)
-        drawQuoteText(lcd, quoteText[:newtext], red, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
+        drawQuoteText(lcd, quoteText[:newtext], red, [10,10,710, 370], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
     elif qText.find(qHighlight) >= len(quoteText) / 2:
-        drawQuoteText(lcd, quoteText, red, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
+        drawQuoteText(lcd, quoteText, red, [10,10,710, 370], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
         newtext = quoteText.find(quoteHighlight)  # + len(quoteHighlight)
-        drawQuoteText(lcd, quoteText[:newtext], white, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
+        drawQuoteText(lcd, quoteText[:newtext], white, [10,10,710, 370], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
     else:
         # Quote highlight can't be found
-        drawQuoteText(lcd, quoteText, white, [10,10,710, 350], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
+        drawQuoteText(lcd, quoteText, white, [10,10,710, 370], fontPath + 'liberation2/LiberationSerif-Italic.ttf', False, None, trySize)
 
-    drawQuoteText(lcd, quoteTitle, grey, [15, 360, 710, 390], fontPath + 'liberation2/LiberationSans-Bold.ttf', False, None, tryTSize)
+    #pygame.draw.rect(lcd, yellow, (15, 360, 695, 57))
+    drawQuoteText(lcd, quoteTitle, grey, [15, 360, 710, 417], fontPath + 'liberation2/LiberationSans-Bold.ttf', False, None, tryTSize)
     #drawText(quoteTitle, 45, 15, 360, grey)
-    drawText(quoteAuthor, 45, 15, 415, grey)
+    drawText(quoteAuthor, 45, 15, 415, white)
     #drawQuoteText(lcd, quoteTitle[:25], white, [10,360,710, 390], fontPath + 'liberation2/LiberationSerif-Bold.ttf', False, None, tryTSize)
     #drawQuoteText(lcd, quoteAuthor, white, [10,415,710, 470], fontPath + 'liberation2/LiberationSerif-Regular.ttf')
     pygame.display.update()    
@@ -648,18 +649,9 @@ def main():
   lcd.fill(white)
   
   while True:
-
+    # Always have the literature clock in the rotation.
     whatsOn = 'clock'
-    if clockStyle == 'analogue':  
-        showAnaTime(3)
-    else:
-        # Show digital clock
-        whatsOn = 'clock'
-        lcd.fill(black)
-        for n in range(30):
-            showTime()
-            time.sleep(0.01)
-            lcd.fill(black)
+    showLitTime(15)
                             
     # Show weather
     whatsOn = 'weather'
@@ -679,10 +671,18 @@ def main():
     except:
         time.sleep(0.25)
     
-    # Always have the literature clock in the rotation.
     whatsOn = 'clock'
-    showLitTime(15)
-                
+    if clockStyle == 'analogue':  
+        showAnaTime(3)
+    else:
+        # Show digital clock
+        whatsOn = 'clock'
+        lcd.fill(black)
+        for n in range(30):
+            showTime()
+            time.sleep(0.01)
+            lcd.fill(black)
+            
     # Show the news...
     whatsOn='news'
     try:
