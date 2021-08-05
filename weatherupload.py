@@ -11,6 +11,11 @@ import time
 from datetime import datetime
 import os
 import paramiko
+
+print("Waiting 30s to let network finish coming up...")
+time.sleep(30)
+print("DONE. Starting weather logging...")
+
 ssh = paramiko.SSHClient()
 
 def writeNew():
