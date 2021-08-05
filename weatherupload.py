@@ -2,7 +2,7 @@
 # INSTRUCTIONS: 
 # SSH from the Sense HAT pi into the bedside clock pi so that it's added as a known host at least once.
 # pip3 install paramiko (IMPORTANT: Do this as root user, otherwise the cron will fail)
-# Add this to cron: @reboot    python3 /home/pi/weather/weather.py >> /home/pi/cronlog.txt 2<&1
+# Add this to cron: @reboot    python3 /home/pi/weather/weatherupload.py >> /home/pi/cronlog.txt 2<&1
 # Put the right IP address, username and password in on line 19 below.
 
 print ("WEATHER.PY - Starting up...")
