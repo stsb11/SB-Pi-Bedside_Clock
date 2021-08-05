@@ -57,20 +57,23 @@ while True:
     temp = sense.get_temperature()
     humid = sense.get_humidity()
 
-    pFile = open('pFile.txt', 'a')
-    pFile.write(str(int(pressure)) + '\n')
-    pFile.close()
-    trimLog('pFile.txt')
+    if pressure > 900 and pressure < 1060:
+        pFile = open('pFile.txt', 'a')
+        pFile.write(str(int(pressure)) + '\n')
+        pFile.close()
+        trimLog('pFile.txt')
 
-    tFile = open('tFile.txt', 'a')
-    tFile.write(str(int(temp)) + '\n')
-    tFile.close()
-    trimLog('tFile.txt')
+    if temp >= -20 and temp <= 80:
+        tFile = open('tFile.txt', 'a')
+        tFile.write(str(int(temp)) + '\n')
+        tFile.close()
+        trimLog('tFile.txt')
 
-    hFile = open('hFile.txt', 'a')
-    hFile.write(str(int(humid)) + '\n')
-    hFile.close()
-    trimLog('hFile.txt')
+    if humid >= 0 and humid <= 110:
+        hFile = open('hFile.txt', 'a')
+        hFile.write(str(int(humid)) + '\n')
+        hFile.close()
+        trimLog('hFile.txt')
 
     writeNew()
     time.sleep(60*15)
