@@ -1,37 +1,16 @@
 #!/usr/bin/python
 # coding=UTF-8
 
-# For the AliExpress TJCTM24024-SPI 2.4" 240x320 SPI TFT screen I used, I used this to get the display working:
-# (From http://www.sudomod.com/forum/viewtopic.php?t=2312)
-# sudo raspi-config
-# Overscan: disabled, SPI: Enabled. Reboot.
-# sudo modprobe fbtft_device custom name=fb_ili9341  gpios=reset:25,dc:24,led:18 speed=16000000 bgr=1
-# sudo nano /etc/modules
-# Add to the bottom...
-#   spi-bcm2835
-#   fbtft_device
-# sudo nano /etc/modprobe.d/fbtft.conf (probably empty)
-#   options fbtft_device name=fb_ili9341 gpios=reset:25,dc:24,led:18 speed=16000000 bgr=1 rotate=270 custom=1
-# reboot
-# sudo apt-get install cmake
-# git clone https://github.com/tasanakorn/rpi-fbcp
-# cd rpi-fbcp/
-# mkdir build
-# cd build/
-# cmake ..
-# make
-# sudo install fbcp /usr/local/bin/fbcp
-# fbcp (Screen will show the default RPi X session
-# sudo nano /etc/rc.local (Now going to make this happen on boot)
-# Add before the 'exit' line: fbcp&
-# Save and reboot.
-# To make clock start on reboot, add '@python /home/pi/SB-Pi-TFT/tft.py' to ~/.config/lxsession/LXDE-pi/autostart
-
-##  Do a sudo pip install for feedparser, pyown
+# sudo pip install feedparser, pyowm, rpi_backlight --break-system-packages
+# To prevent the password warning on boot, do rm /etc/xdg/lxsession/LXDE-pi/sshpwd.sh
+# To make clock start on reboot, add 'python /home/pi/SB-Pi-TFT/tft.py' to the bottom of /home/pi/.bashrc
+# NOTE: This isn't perfect, as whenever you SSH in it'll launch another instance of tft.py.
 
 ########
 ##  Import lots of libraries.
 ########
+from rpi_backlight import Backlight
+import pytz   # Used for weather, to ensure that sunrise/sunset times are GMT.
 import time
 import datetime
 import feedparser
@@ -41,11 +20,20 @@ import os
 import io
 import pyowm
 import math                      # Trig functions used for the analogue clock rendering.
-from urllib2 import urlopen
+from urllib.request import urlopen
 import RPi.GPIO as GPIO # For the PTM interrupts.
 import csv
 import random
 
+# OpenWeatherMap API key...
+weatherKey='YOUR KEY HERE'
+owm = pyowm.OWM(weatherKey)
+mgr = owm.weather_manager()
+
+# Use this initially. Will get corrected after the main loop has run once.
+sunrise = datetime.datetime.now()
+sunset = datetime.datetime.now()
+      
 # Which GPIO pins are the PTMs wired from GND to? Use GPIO number (not pin). Pin 22 has the right switch. 17 and 27 are the others.
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(22, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -53,7 +41,7 @@ GPIO.setup(17, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.setup(27, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 def mid_callback(channel):
-    # 11/3/18. Tried using GPIO.remove_event_detect(27) while this runs, but it causes a seg fault.
+    # Tried using GPIO.remove_event_detect(27) while this runs, but it causes a seg fault.
     global callbackLock
 
     if callbackLock == False:
@@ -109,15 +97,14 @@ GPIO.add_event_detect(17, GPIO.FALLING, callback=left_callback)
 GPIO.add_event_detect(27, GPIO.FALLING, callback=mid_callback) 
 GPIO.add_event_detect(22, GPIO.FALLING, callback=right_callback) 
     
-# OpenWeatherMap API key...
-weatherKey=''
-owm = pyowm.OWM(weatherKey)
-
 #########
 ##  Set up globals
 ########
 pygame.init()
-lcd = pygame.display.set_mode((720, 480), pygame.FULLSCREEN)
+#lcd = pygame.display.set_mode((720, 480), pygame.FULLSCREEN)
+lcd = pygame.display.set_mode((800, 480), pygame.FULLSCREEN)
+#lcd = pygame.display.set_mode((800, 480))
+pygame.display.set_caption('Bedside Clock v1.0')
 pygame.mouse.set_visible(False)
 callbackLock = False # Prevent multiple callbacks when users hit the button.
 # Dampen down the colours a bit to help limit screen burn-in.
@@ -137,9 +124,12 @@ def loadQuotes():
     loc = '/home/pi/SB-Pi-Bedside_Clock'
 
     # Open the times list...
-    with open(loc + '/quotes.csv', 'rb') as csvfile:
+    #with open(loc + '/quotes.csv', 'rb') as csvfile:
+    with open(loc + '/quotes.csv') as csvfile:
         content = csv.reader(csvfile, delimiter='|', quotechar='"')
-        return list(content)
+        output = list(content)
+
+    return output
 
 # Load up literature  (once)...
 quotes = loadQuotes()
@@ -199,93 +189,152 @@ def renderNews():
       
       pygame.display.update()
     except:
-      print "News error:", sys.exc_info()[0]
-      print "News error:", sys.exc_info()[1]
+      print ("News error:", sys.exc_info()[0])
+      print ("News error:", sys.exc_info()[1])
       with open("test.txt", "a") as myfile:
         myfile.write("News error:", sys.exc_info()[0]) 
         myfile.write("News error:", sys.exc_info()[1])
-      
+
+def is_dst(zonename):
+  tz = pytz.timezone(zonename)
+  now = pytz.utc.localize(datetime.datetime.utcnow())
+  return now.astimezone(tz).dst() != datetime.timedelta(0)
+
 def renderWeatherNow():
-  try:
-    observation = owm.weather_at_place('Market Deeping,uk')
-    w = observation.get_weather()
+  global sunrise  # 26/6/23 NEW
+  global sunset   #
+  observation = mgr.weather_at_place('Market Deeping,uk')
+  w = observation.weather
+  currTemp = w.temperature(unit='celsius')
+  icon = w.weather_icon_name
 
-    weather = w.get_detailed_status()
-    weather = weather[0].upper() + weather[1:]
-    currTemp = w.get_temperature(unit='celsius')
-    humid = w.get_humidity()
-    wind = w.get_wind() 
-    windspeed = int(wind['speed'])
-    sunrise = w.get_sunrise_time('iso')
-    sunrise = right(sunrise,11)
-    sunrise = left(sunrise,8)
-    sunset = w.get_sunset_time('iso')
-    sunset = right(sunset,11)
-    sunset = left(sunset,8)
-    cloud = w.get_clouds()
+  sunrise = w.sunrise_time(timeformat='date')
+  sunset = w.sunset_time(timeformat='date')
 
-    # Draw the weather state at the top.
-    drawText(weather, 60, 20, 15, white)
+  # Are we in British Summer Time? If so, add an hour to UTC
+  if (is_dst('Europe/London')):
+      sunrise = sunrise + datetime.timedelta(hours=1)
+      sunset = sunset + datetime.timedelta(hours=1)
+      
+  srise = '{:%H:%M}'.format(sunrise)
+  sset = '{:%H:%M}'.format(sunset)
+
+  weather = w.detailed_status
+  weather = weather[0].upper() + weather[1:]
+  currTemp = w.temperature('celsius')
+  humid = w.humidity
+  wind = observation.weather.wind()
+  cloud = w.clouds      
+  windspeed = wind['speed']
+  w = wind['deg']
+  if w >=337.5 or w<=22.5:
+      d="N"
+  elif w<=67.5:
+      d = "NE"
+  elif w<=112.5:
+      d = "E"
+  elif w<=157.5:
+      d = "SE"
+  elif w<=202.5:
+      d = "S"
+  elif w<=247.5:
+      d = "SW"
+  elif w<=292.5:
+      d = "W"
+  else:
+      d = "NW"
+  
+
+  # Draw the weather state at the top.
+  drawText(weather, 60, 20, 15, white)
     
-    # Show the weather icon
-    icon = w.get_weather_icon_name()
-    renderWeatherIcon(icon, 20, 80, 250, 250)
+  # Show the weather icon
+  renderWeatherIcon(icon, 20, 80, 250, 250)
 
-    # Show the headline figures to the right.
-    drawText("Temperature: " + str(int(currTemp['temp'])) + "C", 45, 320, 100, white)
-    drawText("Wind: " + str(windspeed) + "m/s", 45, 320, 150, white)
-    drawText("Cloud: " + str(cloud) + "%", 45, 320, 200, white)
-    drawText("Sunrise: " + sunrise[:5], 45, 320, 250, white)
-    drawText("Sunset: " + sunset[:5], 45, 320, 300, white)
+  # Show the headline figures to the right.
+  y = 85
+  drawText("Temperature: " + str(int(currTemp['temp'])) + "C", 45, 320, y, white)
+  y += 50
+  drawText("Humidity: " + str(humid) + "%", 45, 320, y, white)
+  y += 50
+  drawText("Wind: " + d + ", " + str(windspeed) + "m/s", 45, 320, y, white)
+  y += 50
+  drawText("Cloud: " + str(cloud) + "%", 45, 320, y, white)
+  y += 50
+  drawText("Sunrise: " + srise, 45, 320, y, white)
+  y += 50
+  drawText("Sunset: " + sset, 45, 320, y, white)
 
-    # Time and date at the bottom
-    theTime = str(datetime.datetime.now().time())
-    theDate = time.strftime("%d/%m/%Y")
-    drawText(theTime[0:5] + ", " + theDate,60,20,390, white)
+  # Time and date at the bottom
+  theTime = str(datetime.datetime.now().time())
+  theDate = time.strftime("%d/%m/%Y")
+  drawText(theTime[0:5] + ", " + theDate,60,20,390, white)
 
-    # Paint the screen
-    pygame.display.update()
-  except:
-    print("Problems!")
-    print "Weather error:", sys.exc_info()[0]
-    print "Weather error:", sys.exc_info()[1]
+  # Paint the screen
+  pygame.display.update()
+  #except:
+  #  print("Problems!")
+  #  print("Weather error:", sys.exc_info()[0])
+  #  print("Weather error:", sys.exc_info()[1])
       
 def renderWeather(): 
-  # Renders longer-term  weather onto the display
-  observation = owm.weather_at_place('Market Deeping,uk')
-  w = observation.get_weather()
+  # Renders longer-term weather onto the display
+  observation = mgr.weather_at_place('Market Deeping,uk')
+  w = observation.weather
+  currTemp = w.temperature(unit='celsius')
+  #icon = w.weather_icon_name
 
-  weather = w.get_detailed_status()
-  weather = weather[0].upper() + weather[1:]
+  sunrise_iso = weather.sunrise_time(timeformat='iso')
+  sunrset_iso = weather.sunset_time(timeformat='iso')
 
-  try:
-    # Do the 3-hourly forecast...
-    hourlyFc = owm.three_hours_forecast('Market Deeping,uk')
-    f = hourlyFc.get_forecast()
-    lst = f.get_weathers()
+  one_call = mgr.one_call(lat=52.6796, lon=-0.3216) # Market Deeping still.
+  theTemp = one_call.current.temperature()
 
-    pygame.draw.rect(lcd, grey, (0, 95, 320, 73))
-    x=15
-    for weather in lst:
-      if x < 300:
-        icon = weather.get_weather_icon_name()
-        theTemp = int(weather.get_temperature(unit='celsius')['temp'])
-        forecastTime = weather.get_reference_time('iso')
-        forecasthour = int(forecastTime[11:13])
-        if forecasthour<12:
-          suffix = "am"
-        elif forecasthour == 0:
-          forecasthour = 12
-          suffix = "am"
-        else:
-          forecasthour -= 12
-          suffix = "pm"
-        renderWeatherIcon(icon, x, 100, 40, 40)
-        drawText(str(forecasthour) + suffix, 15, x+3, 95, white)
-        drawText(str(theTemp) + "C", 15, x + 22 - len(str(theTemp) + "C") * 5, 145, white)
-        drawText(weather.get_status(), 10, x + 20 - len(weather.get_status()) * 3, 133, white)
+  # Get the weather for the next few hours...
+  temps = []
+  humidity = []
+  wind = []
+  for n in range(5):
+      temps.append(one_call.forecast_hourly[n].temperature('celsius').get())
+      wind.append(one_call.forecast_hourly[0].wind().get('speed', 0))
+      humidity.append(one_call.forecast_hourly[n].temperature('celsius').get('feels_like_night', None))
+
+  # Get the daytime and nighttime temperatures for the next 5 days.
+  mornTemps = []
+  eveTemps = []
+  for n in range(5):
+      dayTemps.append(one_call.forecast_daily[n].temperature('celsius').get('feels_like_day', None))
+      nightTemps.append(one_call.forecast_daily[n].temperature('celsius').get('feels_like_night', None))
+  
+  
+  # Do the 3-hourly forecast...
+  hourlyFc = owm.three_hours_forecast('Market Deeping,uk')
+  f = hourlyFc.forecast
+  lst = f.weathers
+
+  pygame.draw.rect(lcd, grey, (0, 95, 320, 73))
+  x=15
+  for weather in lst:
+    if x < 300:
+      icon = weather.weather_icon_name
+      theTemp = int(weather.get_temperature(unit='celsius')['temp'])
+      forecastTime = weather.get_reference_time('iso')
+      forecasthour = int(forecastTime[11:13])
+      if forecasthour<12:
+        suffix = "am"
+      elif forecasthour == 0:
+        forecasthour = 12
+        suffix = "am"
+      else:
+        forecasthour -= 12
+        suffix = "pm"
+
+      renderWeatherIcon(icon, x, 100, 40, 40)
+      drawText(str(forecasthour) + suffix, 15, x+3, 95, white)
+      drawText(str(theTemp) + "C", 15, x + 22 - len(str(theTemp) + "C") * 5, 145, white)
+      drawText(weather.get_status(), 10, x + 20 - len(weather.get_status()) * 3, 133, white)
         
-        x += 50
+      x += 50
         
     # Do the 6-day forecast...
     dailyFc = owm.daily_forecast('Market Deeping,uk', limit=6)
@@ -317,17 +366,18 @@ def renderWeather():
         x += 50
         
     pygame.display.update()
-  except:
-    # Weather trouble...
-    print "Weather error:", sys.exc_info()[0]
-    print "Weather error:", sys.exc_info()[1]
-    drawText("Weather unavailable",20, 5, 5)
-    pygame.display.update()
+  #except:
+  ## Weather trouble...
+  #print ("Weather error:", sys.exc_info()[0])
+  #print ("Weather error:", sys.exc_info()[1])
+  #drawText("Weather unavailable",20, 5, 5)
+  #pygame.display.update()
 
     
 def renderWeatherIcon(icon, xPos, yPos, xSize=90, ySize=90):
   # Renders a weather icon onto the display
-  image_url = "http://openweathermap.org/img/w/" + icon + ".png"
+  #image_url = "http://openweathermap.org/img/w/" + icon + ".png"
+  image_url = "http://openweathermap.org/img/wn/" + icon + "@2x.png"
   image_str = urlopen(image_url).read()
   image_file = io.BytesIO(image_str)
   image = pygame.image.load(image_file)
@@ -335,10 +385,10 @@ def renderWeatherIcon(icon, xPos, yPos, xSize=90, ySize=90):
   lcd.blit(image, (xPos, yPos))
 
 def showBriefWeather():
-    observation = owm.weather_at_place('Market Deeping,uk')
-    w = observation.get_weather()
-    currTemp = w.get_temperature(unit='celsius')
-    icon = w.get_weather_icon_name()
+    observation = mgr.weather_at_place('Market Deeping,uk')
+    w = observation.weather
+    currTemp = w.temperature(unit='celsius')
+    icon = w.weather_icon_name
     renderWeatherIcon(icon, 60, 90, 300, 300)
     drawText(str(int(currTemp['temp'])) + "C", 175, 390, 150, white)
     pygame.display.update()
@@ -360,6 +410,7 @@ def showTime():
   drawText(theDate, 75, 40, 280, white)
   pygame.display.update()
 
+
 def showAnaTime(howLong):
   # howLong is how long to render the time like this before returning to the main loop.
 
@@ -373,9 +424,8 @@ def showAnaTime(howLong):
     tMilli = int(theTime.microsecond / 1000)
     dayNum = datetime.datetime.today().weekday()
     days = {0:'MON', 1:'TUE', 2:'WED', 3:'THU', 4:'FRI', 5:'SAT', 6:'SUN'}
-
     
-    xCentre = 720 / 2
+    xCentre = 800 / 2
     yCentre  = 480 / 2
     lcd.fill(black)
 
@@ -386,18 +436,18 @@ def showAnaTime(howLong):
       # Trig is CPU heavy. Calculate once, use twice.
       cosCalc = math.cos((270 + 6 * mark) * 3.14159 / 180)
       sinCalc = math.sin((270 + 6 * mark) * 3.14159 / 180)
-      xCoordStart = xCentre + tickStart * cosCalc
-      yCoordStart = yCentre + tickStart * sinCalc
-      xCoordEnd = xCentre + (tickStart + tickLength) * cosCalc
-      yCoordEnd = yCentre + (tickStart + tickLength) * sinCalc
+      xCoordStart = int(xCentre + tickStart * cosCalc)
+      yCoordStart = int(yCentre + tickStart * sinCalc)
+      xCoordEnd = int(xCentre + (tickStart + tickLength) * cosCalc)
+      yCoordEnd = int(yCentre + (tickStart + tickLength) * sinCalc)
       if mark % 5 == 0:
         pygame.draw.line(lcd, white, [xCoordStart, yCoordStart], [xCoordEnd, yCoordEnd], 5)
       else:
         pygame.draw.aaline(lcd, white, [xCoordStart, yCoordStart], [xCoordEnd, yCoordEnd], 1)
 
     # Show date and day
-    drawText(days[dayNum], 30, 415, 222, white)
-    drawText(str(tDay), 30, 485, 222, red)
+    drawText(days[dayNum], 30, int(xCentre) + 70, int(yCentre) - 18, white)
+    drawText(str(tDay), 30, int(xCentre) + 135, int(yCentre) - 18, red)
     
     # Hour hand.
     hourHandLength = 110
@@ -410,16 +460,16 @@ def showAnaTime(howLong):
     sinCalc = math.sin(hourAngle * 3.14159 / 180)
 
     # Thin line
-    xCoordStart = xCentre
-    yCoordStart = yCentre
-    xtCoordEnd = xCentre + (hourHandLength * 0.35) * cosCalc
-    ytCoordEnd = yCentre + (hourHandLength * 0.35) * sinCalc
+    xCoordStart = int(xCentre)
+    yCoordStart = int(yCentre)
+    xtCoordEnd = int(xCentre + (hourHandLength * 0.35) * cosCalc)
+    ytCoordEnd = int( yCentre + (hourHandLength * 0.35) * sinCalc)
     pygame.draw.line(lcd, white, [xCoordStart, yCoordStart], [xtCoordEnd, ytCoordEnd], 7)
 
     
     # Thick line
-    xCoordEnd = xCentre + hourHandLength * cosCalc
-    yCoordEnd = yCentre + hourHandLength * sinCalc
+    xCoordEnd = int(xCentre + hourHandLength * cosCalc)
+    yCoordEnd = int(yCentre + hourHandLength * sinCalc)
     pygame.draw.line(lcd, white, [xtCoordEnd, ytCoordEnd], [xCoordEnd, yCoordEnd], 15)    
 
     # Inner-most circle
@@ -435,17 +485,17 @@ def showAnaTime(howLong):
     sinCalc = math.sin((270 + (6 * tMin) + (0.1 * tSeconds)) * 3.14159 / 180)
 
     # Thin line
-    xCoordStart = xCentre
-    yCoordStart = yCentre
-    xtCoordEnd = xCentre + (minHandLength * 0.2) * cosCalc
-    ytCoordEnd = yCentre + (minHandLength * 0.2) * sinCalc
+    xCoordStart = int(xCentre)
+    yCoordStart = int(yCentre)
+    xtCoordEnd = int(xCentre + (minHandLength * 0.2) * cosCalc)
+    ytCoordEnd = int(yCentre + (minHandLength * 0.2) * sinCalc)
     pygame.draw.line(lcd, black, [xCoordStart, yCoordStart], [xtCoordEnd, ytCoordEnd], 9)
     pygame.draw.line(lcd, white, [xCoordStart, yCoordStart], [xtCoordEnd, ytCoordEnd], 7)
 
     
     # Thick line 
-    xCoordEnd = xCentre + minHandLength * cosCalc
-    yCoordEnd = yCentre + minHandLength * sinCalc
+    xCoordEnd = int(xCentre + minHandLength * cosCalc)
+    yCoordEnd = int(yCentre + minHandLength * sinCalc)
     pygame.draw.line(lcd, black, [xtCoordEnd, ytCoordEnd], [xCoordEnd, yCoordEnd], 17)
     pygame.draw.line(lcd, white, [xtCoordEnd, ytCoordEnd], [xCoordEnd, yCoordEnd], 15)
 
@@ -456,25 +506,25 @@ def showAnaTime(howLong):
     pygame.draw.circle(lcd, white, [int(xCoordEnd), int(yCoordEnd)], 6, 0)
 
     # Circle dead-centre to hide the centre-point ends of the lines.
-    pygame.draw.circle(lcd, white, [360, 240], 15, 0)
+    pygame.draw.circle(lcd, white, [int(xCentre), int(yCentre)], 15, 0)
   
     # Second hand.
     secHandLength = 200
     secAngle = (6 * tSeconds) + (0.006 * tMilli)
-    xCoord = xCentre + secHandLength * math.cos((270 + secAngle) * (3.14159 / 180))
-    yCoord = yCentre + secHandLength * math.sin((270 + secAngle) * (3.14159 / 180))
-    pygame.draw.line(lcd, red, [360, 240], [xCoord, yCoord], 5)
+    xCoord = int(xCentre + secHandLength * math.cos((270 + secAngle) * (3.14159 / 180)))
+    yCoord = int(yCentre + secHandLength * math.sin((270 + secAngle) * (3.14159 / 180)))
+    pygame.draw.line(lcd, red, [int(xCentre), int(yCentre)], [int(xCoord), int(yCoord)], 5)
     # Add a little stubby line in the opposite direction, like on a watch
-    xCoord = xCentre + (secHandLength / 7) * math.cos((90 + secAngle) * (3.14159 / 180))
-    yCoord = yCentre + (secHandLength / 7) * math.sin((90 + secAngle) * (3.14159 / 180))
-    pygame.draw.line(lcd, red, [360, 240], [xCoord, yCoord], 5)
+    xCoord = int(xCentre + (secHandLength / 7) * math.cos((90 + secAngle) * (3.14159 / 180)))
+    yCoord = int(yCentre + (secHandLength / 7) * math.sin((90 + secAngle) * (3.14159 / 180)))
+    pygame.draw.line(lcd, red, [int(xCentre), int(yCentre)], [xCoord, yCoord], 5)
     
-    pygame.draw.circle(lcd, red, [360, 240], 10, 0)
-    pygame.draw.circle(lcd, black, [360, 240], 2, 0)
+    pygame.draw.circle(lcd, red, [int(xCentre), int(yCentre)], 10, 0)
+    pygame.draw.circle(lcd, black, [int(xCentre), int(yCentre)], 2, 0)
   
     # Add date and render.
     theDate = time.strftime("%d/%m/%Y")
-    drawText(theDate, 50, 5, 415, white)
+    drawText(theDate, 50, 5, int(yCentre) + 175, white)
     pygame.display.update()
     time.sleep(0.01)
 
@@ -640,40 +690,79 @@ def multiDay():
 ########
 ## Main program loop
 ########
+time.sleep(10)
 
-def main():
+def main():    
   global whatsOn
   global weatherStyle
+  global sunrise
+  global sunset
+  backlight = Backlight()
+  backlight.fade_duration = 2
   
   whichHeadline = 0
   lcd.fill(white)
   
   while True:
-    # Always have the literature clock in the rotation.
-    whatsOn = 'clock'
-    showLitTime(15)
-                            
+    # Set screen brightness....
+    now = datetime.datetime.now()
+    hr = now.hour
+
+    # EXPERIMENT FOR ADAPTIVE RIGHTNESS
+    #if hr > 12:
+    #    t = sunset - now
+    #    minutes = t.total_seconds() / 60
+
+    #    if minutes <= 50 and minutes >= -45:
+    #        bright = 100 - (50 - minutes)
+    #    elif minutes > -45:
+    #        bright = 5
+    #    else:
+    #        bright = 100
+    #else:
+    #    t = sunrise - now
+    #    minutes = t.total_seconds() / 60
+
+    #    if minutes <= 45 and minutes >= -50:
+    #        bright = 50 - minutes
+    #    elif mintutes > -50:
+    #        bright = 100
+    #    else:
+    #        bright = 5
+
+    if hr == 6:
+      backlight.brightness = 25
+    elif hr == 21:
+      backlight.brightness = 50
+    elif hr >= 22 or hr < 7:
+      backlight.brightness = 5
+    else:
+      backlight.brightness = 100
+      
     # Show weather
     whatsOn = 'weather'
     lcd.fill(black)
 
     try:
-        if weatherStyle == 'normal':
-            renderWeatherNow()
-        elif weatherStyle == 'brief':
-            # icon only view
-            showBriefWeather()
-        else:
-            # Detailed view
-            renderWeather()
+      weatherStyle = "normal"
+      
+      if weatherStyle == 'normal':
+        renderWeatherNow()
+      elif weatherStyle == 'brief':
+        # icon only view
+        showBriefWeather()
+      else:
+        # Detailed view
+        renderWeather()
 
-        time.sleep(6)
+      time.sleep(15)
     except:
-        time.sleep(0.25)
-    
+      time.sleep(0.25)
+
+    # Show the clock
     whatsOn = 'clock'
     if clockStyle == 'analogue':  
-        showAnaTime(3)
+        showAnaTime(15)
     else:
         # Show digital clock
         whatsOn = 'clock'
@@ -681,20 +770,38 @@ def main():
         for n in range(30):
             showTime()
             time.sleep(0.01)
-            lcd.fill(black)
-            
+            lcd.fill(black)    
+                
     # Show the news...
     whatsOn='news'
     try:
       lcd.fill(black)
       renderNews()
-      time.sleep(6)
+      time.sleep(10)
     except:
-      print "Unexpected error:", sys.exc_info()[0]          
-      print "Unexpected error:", sys.exc_info()[1]
+      print ("Unexpected error:", sys.exc_info()[0])         
+      print ("Unexpected error:", sys.exc_info()[1])
       time.sleep(0.25)
 
-      
+    # Show the clock
+    whatsOn = 'clock'
+    if clockStyle == 'analogue':  
+        showAnaTime(15)
+    else:
+        # Show digital clock
+        whatsOn = 'clock'
+        lcd.fill(black)
+        for n in range(30):
+            showTime()
+            time.sleep(0.01)
+            lcd.fill(black)    
+
+    # Always have the literature clock in the rotation.
+    whatsOn = 'clock'
+    showLitTime(15)
+
+    #pygame.event.get()
+    
 main()
 
 if __name__ == '__main__':
